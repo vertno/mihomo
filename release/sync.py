@@ -143,7 +143,7 @@ def prepare(cfg,lock):
     repo,up,tag=cfg["repository"],cfg["upstream"],lock["version"]
     branch="builds/"+tag
     ref=api(f"repos/{repo}/git/ref/heads/{branch}",optional=True)
-    if ref and ref["object"]["sha"]!=lock["upstream_commit"]:
+    if ref:
         existing=ref["object"]["sha"]
         if source_lock(repo,existing)!=lock: raise ValueError("Existing source branch has different inputs: "+branch)
         return existing
@@ -156,11 +156,15 @@ def prepare(cfg,lock):
         cli("git","update-index","--cacheinfo","160000,"+lock["core"]["commit"]+","+MOD,cwd=SOURCE)
     (SOURCE/"distribution.lock.json").write_text(json.dumps(lock,indent=2,sort_keys=True)+"\n")
     cli("git","add","distribution.lock.json",cwd=SOURCE)
-    cli("git","-c","user.name=github-actions[bot]","-c","user.email=41898282+github-actions[bot]@users.noreply.github.com","commit","-m",f"Stable distribution {tag} based on {up} {lock['upstream_tag']}",cwd=SOURCE)
-    if not ref:
-        api(f"repos/{repo}/git/refs","-X","POST","-f","ref=refs/heads/"+branch,"-f","sha="+fetched)
-    cli("git","push","origin","HEAD:refs/heads/"+branch,cwd=SOURCE)
-    return cli("git","rev-parse","HEAD",cwd=SOURCE).stdout.strip()
+    # Keep upstream recipes available as data. Only this repository's reviewed CI is executable.
+    ci=cli("git","rev-parse","HEAD",cwd=CONTROL).stdout.strip()
+    cli("git","mv",".github/workflows",".github/upstream-workflows",cwd=SOURCE)
+    cli("git","restore","--source="+ci,"--staged","--worktree","--",".github/workflows",cwd=SOURCE)
+    tree=cli("git","write-tree",cwd=SOURCE).stdout.strip()
+    source=cli("git","-c","user.name=github-actions[bot]","-c","user.email=41898282+github-actions[bot]@users.noreply.github.com","commit-tree",tree,"-p",ci,"-p",fetched,
+               "-m",f"Stable distribution {tag} based on {up} {lock['upstream_tag']}",cwd=SOURCE).stdout.strip()
+    cli("git","push","origin",source+":refs/heads/"+branch,cwd=SOURCE)
+    return source
 
 def main():
     cfg=json.loads((CONTROL/"release/project.json").read_text())

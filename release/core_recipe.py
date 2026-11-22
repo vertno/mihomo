@@ -5,7 +5,7 @@ import subprocess
 import sys
 import yaml
 
-steps=yaml.safe_load(Path(".github/workflows/build.yml").read_text())["jobs"]["build"]["steps"]
+steps=yaml.safe_load(Path(".github/upstream-workflows/build.yml").read_text())["jobs"]["build"]["steps"]
 mode=sys.argv[1]
 env=os.environ.copy()
 names=["Test"] if mode=="test" else ["Update CA","Build core"]
