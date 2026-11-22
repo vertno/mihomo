@@ -3,7 +3,7 @@ import json
 import os
 import sys
 from pathlib import Path
-from sync import api, cli, digest, sha, source_lock, MARK, release_including_draft
+from sync import api, cli, digest, sha, source_lock, MARK, release_including_draft, release_order, releases
 
 repo=os.environ["GITHUB_REPOSITORY"]
 tag=os.environ["RELEASE_TAG"]
@@ -49,6 +49,8 @@ if changed: cli("gh","release","upload",tag,"-R",repo,"--clobber",*changed)
 d=api(address)
 if not d["draft"] or d["tag_name"]!=tag: raise ValueError("Expected original draft")
 if {a["name"]:a["digest"] for a in d["assets"]}!=expected: raise ValueError("Uploaded digests differ from verified files")
-live=api(address,"-X","PATCH","-f","body="+notes,"-F","draft=false","-f","make_latest=true")
+# A failed older run may finish after a newer public release on a later retry.
+newest=all(release_order(kind,lock)>=release_order(kind,r) for r in releases(repo,own=True))
+live=api(address,"-X","PATCH","-f","body="+notes,"-F","draft=false","-f","make_latest="+str(newest).lower())
 if live["draft"] or live["prerelease"] or not live["published_at"] or sha(repo,tag)!=commit: raise ValueError("Publication failed verification")
 print(live["html_url"])

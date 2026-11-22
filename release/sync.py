@@ -150,14 +150,37 @@ def resolve(cfg):
         return rec,wait
     return None,wait
 
+def release_order(kind, record):
+    if kind == "mihomo":
+        return version(record["upstream_tag"]), record["revision"]
+    return version(record["version"])
+
+def source_slot(cfg, lock):
+    """Reuse an identical attempt. Leave interrupted, superseded builds intact."""
+    repo = cfg["repository"]
+    while True:
+        tag = lock["version"]
+        ref = api(f"repos/{repo}/git/ref/heads/builds/{tag}", optional=True)
+        if ref:
+            commit = ref["object"]["sha"]
+            old = source_lock(repo, commit)
+            if old == lock:
+                return commit
+            if old["upstream_tag"] == lock["upstream_tag"] and old["upstream_commit"] != lock["upstream_commit"]:
+                raise ValueError("Upstream moved a tag used in an earlier build: " + lock["upstream_tag"])
+        elif api(f"repos/{repo}/git/ref/tags/{tag}", optional=True) is None:
+            return None
+        if cfg["project"] == "mihomo":
+            raise ValueError("Reserved core version has different inputs: " + tag)
+        lock["version"] = next_app_version([{"version": tag}])
+        print(f"Preserving reserved {tag}; selecting {lock['version']} for the new inputs.")
+
 def prepare(cfg,lock):
+    existing = source_slot(cfg, lock)
+    if existing is not None:
+        return existing
     repo,up,tag=cfg["repository"],cfg["upstream"],lock["version"]
     branch="builds/"+tag
-    ref=api(f"repos/{repo}/git/ref/heads/{branch}",optional=True)
-    if ref:
-        existing=ref["object"]["sha"]
-        if source_lock(repo,existing)!=lock: raise ValueError("Existing source branch has different inputs: "+branch)
-        return existing
     cli("git","fetch","--no-tags","--depth=1","https://github.com/"+up+".git","refs/tags/"+lock["upstream_tag"],cwd=CONTROL)
     fetched=cli("git","rev-parse","FETCH_HEAD^{commit}",cwd=CONTROL).stdout.strip()
     if fetched!=lock["upstream_commit"]: raise ValueError("Fetched source differs from API")

@@ -69,6 +69,22 @@ class ReleaseContracts(unittest.TestCase):
         with self.assertRaisesRegex(ValueError,"expected one release go version"):
             s.release_toolchains("mihomo",workflow)
 
+    def test_resume_or_skip_reserved_application_version(self):
+        lock,_=self.plan(True)
+        ref={"object":{"sha":"staged"}}
+        with patch.object(s,"api",return_value=ref),patch.object(s,"source_lock",return_value=dict(lock)):
+            self.assertEqual(s.source_slot(self.cfg,lock),"staged")
+        prior=dict(lock,core={"commit":"superseded"})
+        with patch.object(s,"api",side_effect=[ref,None,None]),patch.object(s,"source_lock",return_value=prior):
+            self.assertIsNone(s.source_slot(self.cfg,lock))
+            self.assertEqual(lock["version"],"v1.0.2")
+        prior=dict(lock,upstream_commit="tag-moved")
+        with patch.object(s,"api",return_value=ref),patch.object(s,"source_lock",return_value=prior):
+            with self.assertRaisesRegex(ValueError,"moved"):s.source_slot(self.cfg,lock)
+    def test_late_retries_cannot_demote_latest(self):
+        self.assertLess(s.release_order("verge",{"version":"v1.0.9"}),s.release_order("verge",{"version":"v1.0.10"}))
+        self.assertLess(s.release_order("mihomo",{"upstream_tag":"v1.19.34","revision":10}),
+                        s.release_order("mihomo",{"upstream_tag":"v1.20.0","revision":1}))
     def test_version_rollover(self):
         self.assertEqual(s.next_app_version([{"version":"v1.0.999"}]),"v1.1.0")
         self.assertEqual(s.next_app_version([{"version":"v1.99.999"}]),"v2.0.0")
