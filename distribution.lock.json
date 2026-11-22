@@ -1,0 +1,7 @@
+{
+  "revision": 1,
+  "upstream": "MetaCubeX/mihomo",
+  "upstream_commit": "0455d0d28c4526937380505153e65a843d8612e8",
+  "upstream_tag": "v1.19.34",
+  "version": "v1.19.34-r1"
+}
