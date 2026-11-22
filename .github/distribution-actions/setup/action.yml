@@ -1,0 +1,29 @@
+name: setup
+description: Steps from the corresponding upstream release
+runs:
+  using: composite
+  steps:
+  - name: Set up Go
+    if: ${{ matrix.jobs.goversion == '' }}
+    uses: actions/setup-go@4a3601121dd01d1626a1e23e37211e3254c1c06c
+    with:
+      go-download-base-url: https://github.com/MetaCubeX/go/releases/download/build
+      go-version: '1.26'
+  - name: Set up Go
+    if: ${{ matrix.jobs.goversion != '' && matrix.jobs.goversion != 'custom' }}
+    uses: actions/setup-go@4a3601121dd01d1626a1e23e37211e3254c1c06c
+    with:
+      go-download-base-url: https://github.com/MetaCubeX/go/releases/download/build
+      go-version: ${{ matrix.jobs.goversion }}
+  - name: Set up Go1.26 loongarch abi1
+    if: ${{ matrix.jobs.goarch == 'loong64' && matrix.jobs.abi == '1' }}
+    uses: actions/setup-go@4a3601121dd01d1626a1e23e37211e3254c1c06c
+    with:
+      go-download-base-url: https://github.com/MetaCubeX/loongarch64-golang/releases/download/1.26.0
+      go-version: 1.26.0
+  - name: Verify Go installation
+    run: go version
+    shell: bash
+  - name: Verify Go env
+    run: go env
+    shell: bash

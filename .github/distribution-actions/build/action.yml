@@ -1,0 +1,29 @@
+name: build
+description: Steps from the corresponding upstream release
+runs:
+  using: composite
+  steps:
+  - name: Update CA
+    run: 'sudo apt-get update && sudo apt-get install ca-certificates
+
+      sudo update-ca-certificates
+
+      cp -f /etc/ssl/certs/ca-certificates.crt component/ca/ca-certificates.crt
+
+      '
+    shell: bash
+  - name: Build core
+    env:
+      GOOS: ${{matrix.jobs.goos}}
+      GOARCH: ${{matrix.jobs.goarch}}
+      GOAMD64: ${{matrix.jobs.goamd64}}
+      GO386: ${{matrix.jobs.go386}}
+      GOARM: ${{matrix.jobs.goarm}}
+      GOMIPS: ${{matrix.jobs.gomips}}
+    run: "go env\ngo build -v -tags \"with_gvisor\" -trimpath -ldflags \"${BUILDTAG} -X 'github.com/metacubex/mihomo/constant.Version=${VERSION}'\
+      \ -X 'github.com/metacubex/mihomo/constant.BuildTime=${BUILDTIME}' -w -s -buildid=\"\nif [ \"${{matrix.jobs.goos}}\"\
+      \ = \"windows\" ]; then\n  cp mihomo.exe mihomo-${{matrix.jobs.goos}}-${{matrix.jobs.output}}.exe\n  zip -r mihomo-${{matrix.jobs.goos}}-${{matrix.jobs.output}}-${VERSION}.zip\
+      \ mihomo-${{matrix.jobs.goos}}-${{matrix.jobs.output}}.exe\nelse\n  cp mihomo mihomo-${{matrix.jobs.goos}}-${{matrix.jobs.output}}\n\
+      \  gzip -c mihomo-${{matrix.jobs.goos}}-${{matrix.jobs.output}} > mihomo-${{matrix.jobs.goos}}-${{matrix.jobs.output}}-${VERSION}.gz\n\
+      \  rm mihomo-${{matrix.jobs.goos}}-${{matrix.jobs.output}}\nfi\n"
+    shell: bash
