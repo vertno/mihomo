@@ -90,8 +90,9 @@ def output(name,value):
 def digest(path):
     with path.open("rb") as f: return hashlib.file_digest(f,"sha256").hexdigest()
 
-def read_core(upstream_sha, records):
+def read_core(upstream_sha, records, upstream_tag=None):
     matches = [r for r in records if r["upstream_commit"] == upstream_sha
+               and (upstream_tag is None or r["upstream_tag"] == upstream_tag)
                and r["version"] == r["upstream_tag"] + "-patched"]
     if not matches:
         return None
@@ -107,13 +108,14 @@ def windows_core(official, previous):
     # Migrate the previously shipped bundle without changing its stable core.
     if previous:
         last = max(previous, key=lambda r: version(r["version"]))
-        return last["core"]["upstream_commit"]
+        return last["core"]["upstream_commit"], last["core"]["version"].split("-", 1)[0]
     # Upstream's prebuild downloads the latest stable core. Use its publication
     # cutoff so a delayed wake or a retry can never select a later release.
     eligible = (r for r in release_rows("MetaCubeX/mihomo") if version(r["tag_name"])
                 and r["published_at"] <= official["published_at"])
     selected = max(eligible, key=lambda r: r["published_at"])
-    return sha("MetaCubeX/mihomo", selected["tag_name"])
+    tag = selected["tag_name"]
+    return sha("MetaCubeX/mihomo", tag), tag
 
 def resolve(cfg):
     kind, repo, upstream = cfg["project"], cfg["repository"], cfg["upstream"]
@@ -135,10 +137,13 @@ def resolve(cfg):
             raise ValueError("Upstream moved a previously released tag: " + tag)
         lock = {"version": patched, "upstream": upstream, "upstream_tag": tag, "upstream_commit": commit}
         if kind != "mihomo":
-            wanted = gitlink(upstream, commit) if kind == "cmfa" else windows_core(row, previous)
+            if kind == "cmfa":
+                wanted, core_tag = gitlink(upstream, commit), None
+            else:
+                wanted, core_tag = windows_core(row, previous)
             if core_index is None:
                 core_index = releases(CORE, own=True)
-            core = read_core(wanted, core_index)
+            core = read_core(wanted, core_index, core_tag)
             if core is None:
                 waiting = True
                 print(f"{upstream} {tag} waits for a published {CORE} -patched release based on {wanted}")

@@ -24,7 +24,7 @@ class ReleaseContracts(unittest.TestCase):
               patch.object(sync, "sha", side_effect=lambda repo, tag: "custom-core" if repo == sync.CORE else "app-sha"),
               patch.object(sync, "source_lock", return_value=self.core),
               patch.object(sync, "gitlink", return_value="official-core"),
-              patch.object(sync, "windows_core", return_value="official-core") as select_windows):
+              patch.object(sync, "windows_core", return_value=("official-core", "v1.19.34")) as select_windows):
             result = sync.resolve(cfg)
             if published and published[0]["version"] == self.tag + "-patched":
                 select_windows.assert_not_called()
@@ -32,6 +32,8 @@ class ReleaseContracts(unittest.TestCase):
 
     def test_clients_wait_for_public_canonical_core_and_issue_once(self):
         legacy_core = dict(self.core, version="v1.19.34-r3")
+        older_tag = dict(self.core, version="v1.19.33-patched", upstream_tag="v1.19.33")
+        self.assertEqual(self.plan("verge", cores=[older_tag]), (None, True))
         for project in ("cmfa", "verge"):
             self.assertEqual(self.plan(project, cores=[legacy_core]), (None, True))
             self.assertEqual(self.plan(project, cores=[dict(self.core, upstream_commit="other")]), (None, True))
@@ -46,9 +48,9 @@ class ReleaseContracts(unittest.TestCase):
         cores = [dict(tag_name="v1.19.34", published_at="2026-11-11T12:00:00Z"),
                  dict(tag_name="v1.19.33", published_at="2026-10-10T12:00:00Z")]
         with patch.object(sync, "release_rows", return_value=cores), patch.object(sync, "sha", side_effect=lambda _, t: t):
-            self.assertEqual(sync.windows_core(row, []), "v1.19.33")
-            old = dict(version="v1.0.4", core={"upstream_commit": "shipped"})
-            self.assertEqual(sync.windows_core(row, [old]), "shipped")
+            self.assertEqual(sync.windows_core(row, []), ("v1.19.33", "v1.19.33"))
+            old = dict(version="v1.0.4", core={"upstream_commit": "shipped", "version": "v1.19.34-r3"})
+            self.assertEqual(sync.windows_core(row, [old]), ("shipped", "v1.19.34"))
 
     def test_plain_tag_draft_and_prerelease_cannot_unblock(self):
         base = dict(tag_name=self.core["version"], draft=False, prerelease=False, published_at="now",
