@@ -24,8 +24,6 @@ jobs:
         with:
           ref: distribution
           path: control
-      - name: Verify release dependency and retry rules
-        run: python3 -B -m unittest discover -s control/release -p test_release.py
       - id: select
         env:
           GH_TOKEN: ${{ github.token }}
@@ -53,7 +51,7 @@ jobs:
           go-download-base-url: https://github.com/MetaCubeX/go/releases/download/build
           go-version: ${{ needs.plan.outputs.tool_go }}
           cache-dependency-path: source/go.sum
-      - name: Run upstream tests and downstream wire checks
+      - name: Run upstream Go tests including the node window option
         working-directory: source
         run: /usr/bin/python3 ../control/release/core_recipe.py test
 

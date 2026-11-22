@@ -1,5 +1,4 @@
-import hashlib,json,os,tempfile,unittest,zipfile
-from pathlib import Path
+import json,os,unittest
 from unittest.mock import patch
 import sync as s
 
@@ -31,31 +30,9 @@ class ReleaseContracts(unittest.TestCase):
         base=dict(tag_name=self.core["version"],draft=False,prerelease=False,published_at="some-date",body=note)
         with patch.object(s,"api",return_value=[dict(base,draft=True),dict(base,prerelease=True),dict(base,published_at=None),dict(base,body=""),base]):
             self.assertEqual(s.releases(s.CORE,own=True),[self.core])
-    def test_windows_requires_both_archives_and_checks_bytes(self):
-        release=dict(draft=False,prerelease=False,published_at="now",assets=[])
-        def download(*args):
-            d=Path(args[args.index("-D")+1]);t=self.core["version"]
-            (d/"version.txt").write_text(t+"\n")
-            for a in ("amd64-v2","arm64"):
-                with zipfile.ZipFile(d/f"mihomo-windows-{a}-{t}.zip","w") as z:z.writestr("mihomo-windows-"+a+".exe",a.encode())
-            release["assets"][:]=[dict(name=p.name,digest="sha256:"+s.digest(p)) for p in d.iterdir()]
-        # read_core copies the API asset list before downloading, mirroring a published release.
-        with tempfile.TemporaryDirectory() as td:
-            download("-D",td)
-            good=release["assets"].copy()
-            def stable_download(*args):
-                import shutil
-                for p in Path(td).iterdir(): shutil.copy(p,Path(args[args.index("-D")+1])/p.name)
-            with patch.object(s,"api",return_value=release),patch.object(s,"sha",return_value="patched-core"),patch.object(s,"source_lock",return_value=self.core),patch.object(s,"cli",side_effect=stable_download):
-                result=s.read_core("official-core",[self.core],True)
-                self.assertEqual(result["windows"]["amd64-v2"]["exe_sha256"],hashlib.sha256(b"amd64-v2").hexdigest())
-                release["assets"]=[dict(a,digest="sha256:wrong") for a in good]
-                with self.assertRaisesRegex(ValueError,"digest"):s.read_core("official-core",[self.core],True)
-                release["assets"]=good;release["draft"]=True
-                with self.assertRaisesRegex(ValueError,"identity"):s.read_core("official-core",[self.core],False)
     def test_stale_release_source(self):
         with patch.object(s,"api",return_value=dict(draft=False,prerelease=False,published_at="now")),patch.object(s,"sha",return_value="different"),patch.object(s,"source_lock",return_value=self.core):
-            with self.assertRaisesRegex(ValueError,"identity"):s.read_core("official-core",[self.core],False)
+            with self.assertRaisesRegex(ValueError,"identity"):s.read_core("official-core",[self.core])
     def test_tool_versions_come_from_the_upstream_release_job(self):
         mirror="https://github.com/MetaCubeX/go/releases/download/build"
         def go(v, url=mirror):

@@ -6,8 +6,6 @@ import os
 import re
 import subprocess
 import sys
-import tempfile
-import zipfile
 from pathlib import Path
 from urllib.parse import quote
 
@@ -73,7 +71,7 @@ def output(name,value):
 def digest(path):
     with path.open("rb") as f: return hashlib.file_digest(f,"sha256").hexdigest()
 
-def read_core(upstream_sha, records, windows):
+def read_core(upstream_sha, records):
     candidates=[r for r in records if r["upstream_commit"]==upstream_sha]
     if not candidates: return None
     c=max(candidates,key=lambda r:r["revision"])
@@ -83,28 +81,7 @@ def read_core(upstream_sha, records, windows):
     lock=source_lock(CORE,commit)
     if rel["draft"] or rel["prerelease"] or not rel["published_at"] or commit!=c["source_commit"] or any(lock[k]!=c[k] for k in ("version","upstream_commit","revision")):
         raise ValueError("Core release identity mismatch: "+tag)
-    result={"version":tag,"commit":commit,"upstream_commit":upstream_sha}
-    if windows:
-        assets={a["name"]:a for a in rel["assets"]}
-        result["windows"]={}
-        with tempfile.TemporaryDirectory() as folder:
-            names=["version.txt"]+[f"mihomo-windows-{arch}-{tag}.zip" for arch in ("amd64-v2","arm64")]
-            args=["gh","release","download",tag,"-R",CORE,"-D",folder]
-            for name in names: args+=["-p",name]
-            cli(*args)
-            for name in names:
-                p=Path(folder)/name
-                if "sha256:"+digest(p)!=assets[name]["digest"]: raise ValueError("Bad release digest: "+name)
-                if name=="version.txt":
-                    if p.read_text().strip()!=tag: raise ValueError("Wrong core version.txt")
-                    continue
-                arch=name.removeprefix("mihomo-windows-").removesuffix("-"+tag+".zip")
-                with zipfile.ZipFile(p) as z:
-                    member=f"mihomo-windows-{arch}.exe"
-                    if z.namelist()!=[member]: raise ValueError("Unexpected ZIP entries: "+name)
-                    with z.open(member) as exe: exe_hash=hashlib.file_digest(exe,"sha256").hexdigest()
-                result["windows"][arch]={"zip":name,"sha256":assets[name]["digest"].split(":")[1],"exe_sha256":exe_hash}
-    return result
+    return {"version":tag,"commit":commit,"upstream_commit":upstream_sha}
 
 def next_app_version(own):
     major,minor,patch=max((version(r["version"]) for r in own),default=(1,0,0))
@@ -139,7 +116,7 @@ def resolve(cfg):
                 matching=[c for c in core_index if c["upstream_commit"]==wanted]
                 if matching and not cfg["revision"]>old["revision"] and old["core"]["commit"]==max(matching,key=lambda c:c["revision"])["source_commit"]:
                     continue
-            core=read_core(wanted,core_index,kind=="verge")
+            core=read_core(wanted,core_index)
             if not core:
                 wait=True
                 print(f"{up} {tag} waits for a published {CORE} based on {wanted}")
