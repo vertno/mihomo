@@ -177,12 +177,46 @@ def prepare(cfg,lock):
     cli("git","push","origin",source+":refs/heads/"+branch,cwd=SOURCE)
     return source
 
+def release_toolchains(kind, workflow):
+    """Take the build tools from the upstream job used for this release."""
+    job = "build" if kind == "mihomo" else "BuildRelease"
+    steps = workflow["jobs"][job]["steps"]
+    go_mirror = "https://github.com/MetaCubeX/go/releases/download/build"
+    required = [("go", "actions/setup-go", "go-version", "go-download-base-url", go_mirror)]
+    if kind == "cmfa":
+        required.append(("java", "actions/setup-java", "java-version", "distribution", "temurin"))
+    result = {}
+    for name, action, field, selector, value in required:
+        versions = set()
+        for step in steps:
+            inputs = step.get("with", {})
+            if step.get("uses", "").partition("@")[0] != action or inputs.get(selector) != value:
+                continue
+            version_text = str(inputs.get(field, ""))
+            if re.fullmatch(r"\d+(?:\.\d+){0,2}", version_text):
+                versions.add(version_text)
+        if len(versions) != 1:
+            raise ValueError(f"Review the upstream {job} job: expected one release {name} version, found {versions}")
+        result[name] = versions.pop()
+    return result
+
+def upstream_toolchains(cfg, lock):
+    if cfg["project"] == "verge":
+        return {}
+    import yaml
+    name = "build.yml" if cfg["project"] == "mihomo" else "build-release.yaml"
+    path = f"repos/{cfg['upstream']}/contents/.github/workflows/{name}?ref={lock['upstream_commit']}"
+    content = base64.b64decode(api(path)["content"])
+    return release_toolchains(cfg["project"], yaml.safe_load(content))
+
 def main():
     cfg=json.loads((CONTROL/"release/project.json").read_text())
     lock,wait=resolve(cfg)
     output("waiting","true" if wait else "false")
     if lock is None:
         print("No build is due."); return
+    for key, value in upstream_toolchains(cfg,lock).items():
+        output("tool_"+key,value)
     commit=prepare(cfg,lock)
     output("tag",lock["version"]); output("source",commit)
     output("core",lock.get("core",{}).get("version",""))

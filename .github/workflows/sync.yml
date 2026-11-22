@@ -14,6 +14,7 @@ jobs:
     permissions:
       contents: write
     outputs:
+      tool_go: ${{ steps.select.outputs.tool_go }}
       tag: ${{ steps.select.outputs.tag }}
       source: ${{ steps.select.outputs.source }}
       core: ${{ steps.select.outputs.core }}
@@ -28,7 +29,7 @@ jobs:
       - id: select
         env:
           GH_TOKEN: ${{ github.token }}
-        run: python3 control/release/sync.py
+        run: /usr/bin/python3 control/release/sync.py
   test:
     needs: plan
     if: needs.plan.outputs.tag != ''
@@ -50,7 +51,7 @@ jobs:
       - uses: actions/setup-go@4a3601121dd01d1626a1e23e37211e3254c1c06c
         with:
           go-download-base-url: https://github.com/MetaCubeX/go/releases/download/build
-          go-version: '1.26'
+          go-version: ${{ needs.plan.outputs.tool_go }}
           cache-dependency-path: source/go.sum
       - name: Run upstream tests and downstream wire checks
         working-directory: source
@@ -81,7 +82,7 @@ jobs:
       - uses: actions/setup-go@4a3601121dd01d1626a1e23e37211e3254c1c06c
         with:
           go-download-base-url: https://github.com/MetaCubeX/go/releases/download/build
-          go-version: '1.26'
+          go-version: ${{ needs.plan.outputs.tool_go }}
           cache-dependency-path: source/go.sum
       - name: Use the official CA update and Windows packaging recipe
         working-directory: source

@@ -56,6 +56,19 @@ class ReleaseContracts(unittest.TestCase):
     def test_stale_release_source(self):
         with patch.object(s,"api",return_value=dict(draft=False,prerelease=False,published_at="now")),patch.object(s,"sha",return_value="different"),patch.object(s,"source_lock",return_value=self.core):
             with self.assertRaisesRegex(ValueError,"identity"):s.read_core("official-core",[self.core],False)
+    def test_tool_versions_come_from_the_upstream_release_job(self):
+        mirror="https://github.com/MetaCubeX/go/releases/download/build"
+        def go(v, url=mirror):
+            return {"uses":"actions/setup-go@upstream","with":{"go-version":v,"go-download-base-url":url}}
+        java={"uses":"actions/setup-java@upstream","with":{"java-version":25,"distribution":"temurin"}}
+        steps=[go("1.27"),go("matrix expression"),go("1.30","other architecture mirror"),java]
+        workflow={"jobs":{"BuildRelease":{"steps":steps},"build":{"steps":steps}}}
+        self.assertEqual(s.release_toolchains("cmfa",workflow),{"go":"1.27","java":"25"})
+        self.assertEqual(s.release_toolchains("mihomo",workflow),{"go":"1.27"})
+        steps.append(go("1.28"))
+        with self.assertRaisesRegex(ValueError,"expected one release go version"):
+            s.release_toolchains("mihomo",workflow)
+
     def test_version_rollover(self):
         self.assertEqual(s.next_app_version([{"version":"v1.0.999"}]),"v1.1.0")
         self.assertEqual(s.next_app_version([{"version":"v1.99.999"}]),"v2.0.0")
