@@ -1,5 +1,7 @@
-# Mihomo — personal stable builds
+# Mihomo Stable Builds
 
-Personal distribution based on [MetaCubeX/mihomo](https://github.com/MetaCubeX/mihomo). [Download a signed application or a stable core from Releases](https://github.com/vertno/mihomo/releases). The release tag points at the complete patched source. The `distribution` branch contains the downstream patch and release controls.
+Download the Windows amd64-v2 or ARM64 core and its version file from the [latest core release](https://github.com/vertno/mihomo/releases/latest).
 
-XHTTP nodes may set `xhttp-opts.download-settings.h2-stream-receive-window` in bytes for their independent HTTP/2 download transport. Omitting it or specifying zero uses the upstream default. For a 16 MiB window use `16777216`.
+A VLESS XHTTP node can set `xhttp-opts.download-settings.h2-stream-receive-window` in bytes for its independent HTTP/2 download connection. Use `16777216` for 16 MiB. Omitting the field or setting it to zero uses the upstream default.
+
+The release tag contains the patched source and records the upstream commit in `distribution.lock.json`. The `distribution` branch holds the patch and release workflow. [Official Mihomo](https://github.com/MetaCubeX/mihomo)
