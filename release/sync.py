@@ -166,11 +166,18 @@ def source_slot(cfg, lock):
 
 
 def prepare(cfg,lock):
+    repo, up, tag = cfg["repository"], cfg["upstream"], lock["version"]
+    branch = "builds/" + tag
+    ci = cli("git", "rev-parse", "HEAD", cwd=CONTROL).stdout.strip()
     existing = source_slot(cfg, lock)
+    previous_parent = []
     if existing is not None:
-        return existing
-    repo,up,tag=cfg["repository"],cfg["upstream"],lock["version"]
-    branch="builds/"+tag
+        old_ci = api(f"repos/{repo}/git/commits/{existing}", "--jq", ".parents[0].sha|@json")
+        if old_ci == ci or api(f"repos/{repo}/git/ref/tags/{tag}", optional=True) is not None:
+            return existing
+        # Carry an unpublished attempt forward when its release instructions were fixed.
+        cli("git", "fetch", "--no-tags", "--depth=1", "origin", "refs/heads/" + branch, cwd=CONTROL)
+        previous_parent = ["-p", existing]
     cli("git","fetch","--no-tags","--depth=1","https://github.com/"+up+".git","refs/tags/"+lock["upstream_tag"],cwd=CONTROL)
     fetched=cli("git","rev-parse","FETCH_HEAD^{commit}",cwd=CONTROL).stdout.strip()
     if fetched!=lock["upstream_commit"]: raise ValueError("Fetched source differs from API")
@@ -181,14 +188,13 @@ def prepare(cfg,lock):
     (SOURCE/"distribution.lock.json").write_text(json.dumps(lock,indent=2,sort_keys=True)+"\n")
     cli("git","add","distribution.lock.json",cwd=SOURCE)
     # Preserve the original workflow files alongside the steps used in this build.
-    ci=cli("git","rev-parse","HEAD",cwd=CONTROL).stdout.strip()
     cli("git","mv",".github/workflows",".github/upstream-workflows",cwd=SOURCE)
     cli("git","restore","--source="+ci,"--staged","--worktree","--",".github/workflows",cwd=SOURCE)
     from recipes import write_actions
     write_actions(cfg["project"], SOURCE)
-    cli("git","add",".github/distribution-actions",cwd=SOURCE)
+    cli("git","add","--force","--",":(glob).github/distribution-actions/*/action.yml",cwd=SOURCE)
     tree=cli("git","write-tree",cwd=SOURCE).stdout.strip()
-    source=cli("git","-c","user.name=github-actions[bot]","-c","user.email=41898282+github-actions[bot]@users.noreply.github.com","commit-tree",tree,"-p",ci,"-p",fetched,
+    source=cli("git","-c","user.name=github-actions[bot]","-c","user.email=41898282+github-actions[bot]@users.noreply.github.com","commit-tree",tree,"-p",ci,"-p",fetched,*previous_parent,
                "-m",f"Stable distribution {tag} based on {up} {lock['upstream_tag']}",cwd=SOURCE).stdout.strip()
     cli("git","push","origin",source+":refs/heads/"+branch,cwd=SOURCE)
     return source
