@@ -33,21 +33,40 @@ def version(tag):
         return tuple(int(n) for n in tag[1:].split("."))
     return None
 
+def release_rows(repo):
+    """Iterate releases with a small response, including old maintenance releases."""
+    page = 1
+    while True:
+        rows = api(f"repos/{repo}/releases?per_page=100&page={page}", "--jq",
+                   "[.[] | {tag_name,draft,prerelease,published_at,body}]")
+        for row in rows:
+            if row["published_at"] and not row["draft"] and not row["prerelease"]:
+                yield row
+        if len(rows) < 100:
+            return
+        page += 1
+
 def releases(repo, own=False, floor=None):
-    rows=[]
-    for page in range(1,1001):
-        batch=api(f"repos/{repo}/releases?per_page=25&page={page}","--jq","[.[]|{tag_name,draft,prerelease,published_at,body}]" if own else "[.[]|{tag_name,draft,prerelease,published_at}]")
-        for r in batch:
-            if r["draft"] or r["prerelease"] or not r["published_at"]: continue
-            if own:
-                match=re.search(r"<!-- distribution (\{[^\n]*\}) -->",r.get("body") or "")
-                if match:
-                    info=json.loads(match[1])
-                    if info["version"]!=r["tag_name"]: raise ValueError("Release tag and identity disagree")
-                    rows.append(info)
-            elif (v:=version(r["tag_name"])) and v>=floor: rows.append(r["tag_name"])
-        if len(batch)<25 or (not own and any(version(r["tag_name"]) and version(r["tag_name"])<floor and not r["prerelease"] for r in batch)): break
-    return rows if own else sorted(set(rows),key=version)
+    result = []
+    for row in release_rows(repo):
+        tag = row["tag_name"]
+        if not own:
+            if (v := version(tag)) and v >= floor:
+                result.append(row)
+            continue
+        marker = re.search(r"<!-- distribution (\{[^\n]*\}) -->", row.get("body") or "")
+        if marker:
+            info = json.loads(marker[1])
+        elif tag.endswith("-patched") and version(tag.removesuffix("-patched")):
+            # Editing release notes does not make a published version eligible again.
+            info = {**source_lock(repo, tag), "source_commit": sha(repo, tag)}
+        else:
+            continue
+        if info["version"] != tag:
+            raise ValueError("Release tag and identity disagree: " + tag)
+        result.append(info)
+    return result if own else sorted(result, key=lambda r: version(r["tag_name"]))
+
 
 def release_including_draft(repo,tag):
     pages=api(f"repos/{repo}/releases?per_page=100","--paginate","--slurp")
@@ -72,85 +91,79 @@ def digest(path):
     with path.open("rb") as f: return hashlib.file_digest(f,"sha256").hexdigest()
 
 def read_core(upstream_sha, records):
-    candidates=[r for r in records if r["upstream_commit"]==upstream_sha]
-    if not candidates: return None
-    c=max(candidates,key=lambda r:r["revision"])
-    tag=c["version"]
-    rel=api(f"repos/{CORE}/releases/tags/{tag}")
-    commit=sha(CORE,tag)
-    lock=source_lock(CORE,commit)
-    if rel["draft"] or rel["prerelease"] or not rel["published_at"] or commit!=c["source_commit"] or any(lock[k]!=c[k] for k in ("version","upstream_commit","revision")):
-        raise ValueError("Core release identity mismatch: "+tag)
-    return {"version":tag,"commit":commit,"upstream_commit":upstream_sha}
+    matches = [r for r in records if r["upstream_commit"] == upstream_sha
+               and r["version"] == r["upstream_tag"] + "-patched"]
+    if not matches:
+        return None
+    core = max(matches, key=lambda r: version(r["upstream_tag"]))
+    tag = core["version"]
+    commit = sha(CORE, tag)
+    lock = source_lock(CORE, commit)
+    if commit != core["source_commit"] or any(lock[k] != core[k] for k in ("version", "upstream_commit")):
+        raise ValueError("Core release identity mismatch: " + tag)
+    return {"version": tag, "commit": commit, "upstream_commit": upstream_sha}
 
-def next_app_version(own):
-    major,minor,patch=max((version(r["version"]) for r in own),default=(1,0,0))
-    patch+=1
-    if patch==1000:
-        minor,patch=minor+1,0
-    if minor==100:
-        major,minor=major+1,0
-    return f"v{major}.{minor}.{patch}"
-
+def windows_core(official, previous):
+    # Migrate the previously shipped bundle without changing its stable core.
+    if previous:
+        last = max(previous, key=lambda r: version(r["version"]))
+        return last["core"]["upstream_commit"]
+    # Upstream's prebuild downloads the latest stable core. Use its publication
+    # cutoff so a delayed wake or a retry can never select a later release.
+    eligible = (r for r in release_rows("MetaCubeX/mihomo") if version(r["tag_name"])
+                and r["published_at"] <= official["published_at"])
+    selected = max(eligible, key=lambda r: r["published_at"])
+    return sha("MetaCubeX/mihomo", selected["tag_name"])
 
 def resolve(cfg):
-    kind,repo,up=cfg["project"],cfg["repository"],cfg["upstream"]
-    if repo!=os.environ["GITHUB_REPOSITORY"]: raise ValueError("Unexpected destination repository")
-    own=releases(repo,own=True)
-    tags=releases(up,floor=version(cfg["first_tag"]))
-    if not tags: raise ValueError("No official stable releases at the configured baseline")
-    core_index=[] if kind=="mihomo" else releases(CORE,own=True)
-    newest_seen=max((version(r["upstream_tag"]) for r in own),default=(0,0,0))
-    wait=False
-    for tag in tags:
-        if version(tag)<newest_seen: continue
-        prior=[r for r in own if r["upstream_tag"]==tag]
-        if prior and tag!=tags[-1]: continue
-        usha=sha(up,tag)
-        if any(r["upstream_commit"]!=usha for r in prior): raise ValueError(f"Upstream moved {tag}")
-        rec={"upstream":up,"upstream_tag":tag,"upstream_commit":usha,"revision":cfg["revision"]}
-        if kind!="mihomo":
-            wanted=gitlink(up,usha) if kind=="cmfa" else sha("MetaCubeX/mihomo",api("repos/MetaCubeX/mihomo/releases/latest")["tag_name"])
-            if prior:
-                old=max(prior,key=lambda r:version(r["version"]))
-                matching=[c for c in core_index if c["upstream_commit"]==wanted]
-                if matching and not cfg["revision"]>old["revision"] and old["core"]["commit"]==max(matching,key=lambda c:c["revision"])["source_commit"]:
-                    continue
-            core=read_core(wanted,core_index)
-            if not core:
-                wait=True
-                print(f"{up} {tag} waits for a published {CORE} based on {wanted}")
+    kind, repo, upstream = cfg["project"], cfg["repository"], cfg["upstream"]
+    if repo != os.environ["GITHUB_REPOSITORY"]:
+        raise ValueError("Unexpected destination repository")
+    own = releases(repo, own=True)
+    issued = {r["version"] for r in own}
+    official = releases(upstream, floor=version(cfg["first_tag"]))
+    core_index = None
+    waiting = False
+    for row in official:
+        tag = row["tag_name"]
+        patched = tag + "-patched"
+        if patched in issued:
+            continue
+        commit = sha(upstream, tag)
+        previous = [r for r in own if r["upstream_tag"] == tag]
+        if any(r["upstream_commit"] != commit for r in previous):
+            raise ValueError("Upstream moved a previously released tag: " + tag)
+        lock = {"version": patched, "upstream": upstream, "upstream_tag": tag, "upstream_commit": commit}
+        if kind != "mihomo":
+            wanted = gitlink(upstream, commit) if kind == "cmfa" else windows_core(row, previous)
+            if core_index is None:
+                core_index = releases(CORE, own=True)
+            core = read_core(wanted, core_index)
+            if core is None:
+                waiting = True
+                print(f"{upstream} {tag} waits for a published {CORE} -patched release based on {wanted}")
                 continue
-            rec["core"]=core
-        elif prior and max(r["revision"] for r in prior)>=cfg["revision"]: continue
-        rec["version"]=f"{tag}-r{cfg['revision']}" if kind=="mihomo" else next_app_version(own)
-        return rec,wait
-    return None,wait
+            lock["core"] = core
+        return lock, waiting
+    return None, waiting
 
-def release_order(kind, record):
-    if kind == "mihomo":
-        return version(record["upstream_tag"]), record["revision"]
-    return version(record["version"])
+def release_order(record):
+    tag = record["upstream_tag"]
+    return version(tag), record["version"] == tag + "-patched"
 
 def source_slot(cfg, lock):
-    """Reuse an identical attempt. Leave interrupted, superseded builds intact."""
-    repo = cfg["repository"]
-    while True:
-        tag = lock["version"]
-        ref = api(f"repos/{repo}/git/ref/heads/builds/{tag}", optional=True)
-        if ref:
-            commit = ref["object"]["sha"]
-            old = source_lock(repo, commit)
-            if old == lock:
-                return commit
-            if old["upstream_tag"] == lock["upstream_tag"] and old["upstream_commit"] != lock["upstream_commit"]:
-                raise ValueError("Upstream moved a tag used in an earlier build: " + lock["upstream_tag"])
-        elif api(f"repos/{repo}/git/ref/tags/{tag}", optional=True) is None:
-            return None
-        if cfg["project"] == "mihomo":
-            raise ValueError("Reserved core version has different inputs: " + tag)
-        lock["version"] = next_app_version([{"version": tag}])
-        print(f"Preserving reserved {tag}; selecting {lock['version']} for the new inputs.")
+    """Retries use the same source and tag. Published artifacts are immutable."""
+    repo, tag = cfg["repository"], lock["version"]
+    ref = api(f"repos/{repo}/git/ref/heads/builds/{tag}", optional=True)
+    if ref is None:
+        ref = api(f"repos/{repo}/git/ref/tags/{tag}", optional=True)
+    if ref is None:
+        return None
+    commit = ref["object"]["sha"]
+    if source_lock(repo, commit) != lock:
+        raise ValueError("Reserved release has different source or core: " + tag)
+    return commit
+
 
 def prepare(cfg,lock):
     existing = source_slot(cfg, lock)
@@ -167,47 +180,18 @@ def prepare(cfg,lock):
         cli("git","update-index","--cacheinfo","160000,"+lock["core"]["commit"]+","+MOD,cwd=SOURCE)
     (SOURCE/"distribution.lock.json").write_text(json.dumps(lock,indent=2,sort_keys=True)+"\n")
     cli("git","add","distribution.lock.json",cwd=SOURCE)
-    # Keep upstream recipes available as data. Only this repository's reviewed CI is executable.
+    # Preserve the original workflow files alongside the steps used in this build.
     ci=cli("git","rev-parse","HEAD",cwd=CONTROL).stdout.strip()
     cli("git","mv",".github/workflows",".github/upstream-workflows",cwd=SOURCE)
     cli("git","restore","--source="+ci,"--staged","--worktree","--",".github/workflows",cwd=SOURCE)
+    from recipes import write_actions
+    write_actions(cfg["project"], SOURCE)
+    cli("git","add",".github/distribution-actions",cwd=SOURCE)
     tree=cli("git","write-tree",cwd=SOURCE).stdout.strip()
     source=cli("git","-c","user.name=github-actions[bot]","-c","user.email=41898282+github-actions[bot]@users.noreply.github.com","commit-tree",tree,"-p",ci,"-p",fetched,
                "-m",f"Stable distribution {tag} based on {up} {lock['upstream_tag']}",cwd=SOURCE).stdout.strip()
     cli("git","push","origin",source+":refs/heads/"+branch,cwd=SOURCE)
     return source
-
-def release_toolchains(kind, workflow):
-    """Take the build tools from the upstream job used for this release."""
-    job = "build" if kind == "mihomo" else "BuildRelease"
-    steps = workflow["jobs"][job]["steps"]
-    go_mirror = "https://github.com/MetaCubeX/go/releases/download/build"
-    required = [("go", "actions/setup-go", "go-version", "go-download-base-url", go_mirror)]
-    if kind == "cmfa":
-        required.append(("java", "actions/setup-java", "java-version", "distribution", "temurin"))
-    result = {}
-    for name, action, field, selector, value in required:
-        versions = set()
-        for step in steps:
-            inputs = step.get("with", {})
-            if step.get("uses", "").partition("@")[0] != action or inputs.get(selector) != value:
-                continue
-            version_text = str(inputs.get(field, ""))
-            if re.fullmatch(r"\d+(?:\.\d+){0,2}", version_text):
-                versions.add(version_text)
-        if len(versions) != 1:
-            raise ValueError(f"Review the upstream {job} job: expected one release {name} version, found {versions}")
-        result[name] = versions.pop()
-    return result
-
-def upstream_toolchains(cfg, lock):
-    if cfg["project"] == "verge":
-        return {}
-    import yaml
-    name = "build.yml" if cfg["project"] == "mihomo" else "build-release.yaml"
-    path = f"repos/{cfg['upstream']}/contents/.github/workflows/{name}?ref={lock['upstream_commit']}"
-    content = base64.b64decode(api(path)["content"])
-    return release_toolchains(cfg["project"], yaml.safe_load(content))
 
 def main():
     cfg=json.loads((CONTROL/"release/project.json").read_text())
@@ -215,9 +199,8 @@ def main():
     output("waiting","true" if wait else "false")
     if lock is None:
         print("No build is due."); return
-    for key, value in upstream_toolchains(cfg,lock).items():
-        output("tool_"+key,value)
     commit=prepare(cfg,lock)
+    output("upstream_tag",lock["upstream_tag"])
     output("tag",lock["version"]); output("source",commit)
     output("core",lock.get("core",{}).get("version",""))
     print(f"{cfg['repository']}: {lock['version']} -> {commit}")

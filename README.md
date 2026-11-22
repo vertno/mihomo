@@ -7,3 +7,5 @@ A VLESS XHTTP node can set `xhttp-opts.download-settings.h2-stream-receive-windo
 The release tag contains the patched source and records the upstream commit in `distribution.lock.json`. The `distribution` branch holds the patch and release workflow. [Official Mihomo](https://github.com/MetaCubeX/mihomo)
 
 Both the stable and alpha update channels resolve to the personal stable release.
+
+Each official stable tag produces one release named `vX.Y.Z-patched`.

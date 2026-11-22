@@ -14,7 +14,6 @@ jobs:
     permissions:
       contents: write
     outputs:
-      tool_go: ${{ steps.select.outputs.tool_go }}
       tag: ${{ steps.select.outputs.tag }}
       source: ${{ steps.select.outputs.source }}
       core: ${{ steps.select.outputs.core }}
@@ -22,7 +21,7 @@ jobs:
     steps:
       - uses: actions/checkout@v6
         with:
-          ref: distribution
+          ref: ${{ github.sha }}
           path: control
       - id: select
         env:
@@ -32,28 +31,19 @@ jobs:
     needs: plan
     if: needs.plan.outputs.tag != ''
     runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        jobs: [{test: test}]
     env:
       CGO_ENABLED: 0
       GOTOOLCHAIN: local
     steps:
       - uses: actions/checkout@v6
         with:
-          ref: distribution
-          path: control
-          persist-credentials: false
-      - uses: actions/checkout@v6
-        with:
           ref: ${{ needs.plan.outputs.source }}
-          path: source
           persist-credentials: false
-      - uses: actions/setup-go@4a3601121dd01d1626a1e23e37211e3254c1c06c
-        with:
-          go-download-base-url: https://github.com/MetaCubeX/go/releases/download/build
-          go-version: ${{ needs.plan.outputs.tool_go }}
-          cache-dependency-path: source/go.sum
-      - name: Run upstream Go tests including the node window option
-        working-directory: source
-        run: /usr/bin/python3 ../control/release/core_recipe.py test
+      - uses: ./.github/distribution-actions/setup
+      - uses: ./.github/distribution-actions/test
 
   build:
     needs: plan
@@ -61,39 +51,29 @@ jobs:
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        arch: [amd64-v2, arm64]
+        jobs:
+          - {goos: windows, goarch: amd64, goamd64: v2, output: amd64-v2}
+          - {goos: windows, goarch: arm64, output: arm64}
     env:
       CGO_ENABLED: 0
       GOTOOLCHAIN: local
+      BUILDTAG: -extldflags --static
       VERSION: ${{ needs.plan.outputs.tag }}
     steps:
       - uses: actions/checkout@v6
         with:
-          ref: distribution
-          path: control
-          persist-credentials: false
-      - uses: actions/checkout@v6
-        with:
           ref: ${{ needs.plan.outputs.source }}
-          path: source
           persist-credentials: false
-      - uses: actions/setup-go@4a3601121dd01d1626a1e23e37211e3254c1c06c
-        with:
-          go-download-base-url: https://github.com/MetaCubeX/go/releases/download/build
-          go-version: ${{ needs.plan.outputs.tool_go }}
-          cache-dependency-path: source/go.sum
-      - name: Use the official CA update and Windows packaging recipe
-        working-directory: source
-        env:
-          ARCH: ${{ matrix.arch }}
-        run: |
-          export BUILDTIME="$(git show -s --format=%cI HEAD)"
-          /usr/bin/python3 ../control/release/core_recipe.py "$ARCH"
+      - uses: ./.github/distribution-actions/setup
+      - name: Set the timestamp of the pinned source
+        run: echo "BUILDTIME=$(git show -s --format=%cI HEAD)" >> "$GITHUB_ENV"
+      - uses: ./.github/distribution-actions/build
       - uses: actions/upload-artifact@v4
         with:
-          name: core-${{ matrix.arch }}
-          path: source/mihomo-windows-*-${{ env.VERSION }}.zip
+          name: core-${{ matrix.jobs.output }}
+          path: mihomo-windows-*-${{ env.VERSION }}.zip
           if-no-files-found: error
+
   publish:
     needs: [plan, test, build]
     if: needs.plan.outputs.tag != ''
@@ -103,7 +83,7 @@ jobs:
     steps:
       - uses: actions/checkout@v6
         with:
-          ref: distribution
+          ref: ${{ github.sha }}
           path: control
       - uses: actions/download-artifact@v4
         with:

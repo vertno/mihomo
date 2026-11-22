@@ -50,7 +50,7 @@ d=api(address)
 if not d["draft"] or d["tag_name"]!=tag: raise ValueError("Expected original draft")
 if {a["name"]:a["digest"] for a in d["assets"]}!=expected: raise ValueError("Uploaded digests differ from verified files")
 # A failed older run may finish after a newer public release on a later retry.
-newest=all(release_order(kind,lock)>=release_order(kind,r) for r in releases(repo,own=True))
+newest=all(release_order(lock)>=release_order(r) for r in releases(repo,own=True))
 live=api(address,"-X","PATCH","-f","body="+notes,"-F","draft=false","-f","make_latest="+str(newest).lower())
 if live["draft"] or live["prerelease"] or not live["published_at"] or sha(repo,tag)!=commit: raise ValueError("Publication failed verification")
 print(live["html_url"])
