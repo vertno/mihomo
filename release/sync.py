@@ -51,6 +51,12 @@ def releases(repo, own=False, floor=None):
         if len(batch)<25 or (not own and any(version(r["tag_name"]) and version(r["tag_name"])<floor and not r["prerelease"] for r in batch)): break
     return rows if own else sorted(set(rows),key=version)
 
+def release_including_draft(repo,tag):
+    pages=api(f"repos/{repo}/releases?per_page=100","--paginate","--slurp")
+    rows=[r for page in pages for r in page if r["tag_name"]==tag]
+    if len(rows)>1: raise ValueError("More than one release for "+tag)
+    return api(f"repos/{repo}/releases/{rows[0]['id']}") if rows else None
+
 def sha(repo,ref):
     return api(f"repos/{repo}/commits/{quote(ref,safe='')}","--jq",".sha|@json")
 
@@ -102,8 +108,13 @@ def read_core(upstream_sha, records, windows):
 
 def next_app_version(own):
     major,minor,patch=max((version(r["version"]) for r in own),default=(1,0,0))
-    if patch>=999: minor,patch=minor+1,0
-    return f"v{major}.{minor}.{patch+1}"
+    patch+=1
+    if patch==1000:
+        minor,patch=minor+1,0
+    if minor==100:
+        major,minor=major+1,0
+    return f"v{major}.{minor}.{patch}"
+
 
 def resolve(cfg):
     kind,repo,up=cfg["project"],cfg["repository"],cfg["upstream"]

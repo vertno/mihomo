@@ -1,9 +1,9 @@
 """Publish only the files validated for this exact patched source."""
 import json
 import os
-import re
+import sys
 from pathlib import Path
-from sync import api, cli, digest, sha, source_lock, MARK
+from sync import api, cli, digest, sha, source_lock, MARK, release_including_draft
 
 repo=os.environ["GITHUB_REPOSITORY"]
 tag=os.environ["RELEASE_TAG"]
@@ -31,21 +31,24 @@ identity={**lock,"source_commit":commit}
 notes=f"Based on [{lock['upstream']} {lock['upstream_tag']}](https://github.com/{lock['upstream']}/releases/tag/{lock['upstream_tag']}).\n\n"
 if "core" in lock: notes+=f"Core: [vertno/mihomo {lock['core']['version']}](https://github.com/vertno/mihomo/releases/tag/{lock['core']['version']}).\n\n"
 notes+=MARK+json.dumps(identity,separators=(",",":"))+" -->\n"
-p=Path("release-notes.md");p.write_text(notes)
-release=api(f"repos/{repo}/releases/tags/{tag}",optional=True)
-if not release:
-    cli("gh","release","create",tag,"-R",repo,"--draft","--verify-tag","--title",tag,"--notes-file",str(p))
-else:
-    if not release["draft"]:
-        if release["body"].strip()!=notes.strip(): raise ValueError("Published release identity changed")
-        print("Already published"); exit(0)
-    cli("gh","release","edit",tag,"-R",repo,"--notes-file",str(p))
-cli("gh","release","upload",tag,"-R",repo,"--clobber",*map(str,files.values()))
-d=api(f"repos/{repo}/releases/tags/{tag}")
-if not d["draft"]: raise ValueError("Expected a draft")
-actual={a["name"]:a["digest"] for a in d["assets"]}
-if actual!={n:"sha256:"+digest(f) for n,f in files.items()}: raise ValueError("Uploaded digests differ from verified files")
-cli("gh","release","edit",tag,"-R",repo,"--draft=false","--latest")
-live=api(f"repos/{repo}/releases/tags/{tag}")
+# The tag endpoint only lists published releases. Drafts are found by their numeric id.
+rel=release_including_draft(repo,tag)
+if rel is None:
+    rel=api(f"repos/{repo}/releases","-X","POST","-f","tag_name="+tag,"-f","target_commitish="+commit,
+            "-f","name="+tag,"-f","body="+notes,"-F","draft=true","-F","prerelease=false")
+address=f"repos/{repo}/releases/{rel['id']}"
+expected={n:"sha256:"+digest(f) for n,f in files.items()}
+actual={a["name"]:a["digest"] for a in rel["assets"]}
+if set(actual)-set(expected): raise ValueError("Unexpected files in release")
+if not rel["draft"]:
+    if MARK+json.dumps(identity,separators=(",",":"))+" -->" not in rel["body"] or actual!=expected:
+        raise ValueError("Already published with different inputs or files")
+    print("Already verified:",rel["html_url"]); sys.exit(0)
+changed=[str(files[n]) for n,checksum in expected.items() if actual.get(n)!=checksum]
+if changed: cli("gh","release","upload",tag,"-R",repo,"--clobber",*changed)
+d=api(address)
+if not d["draft"] or d["tag_name"]!=tag: raise ValueError("Expected original draft")
+if {a["name"]:a["digest"] for a in d["assets"]}!=expected: raise ValueError("Uploaded digests differ from verified files")
+live=api(address,"-X","PATCH","-f","body="+notes,"-F","draft=false","-f","make_latest=true")
 if live["draft"] or live["prerelease"] or not live["published_at"] or sha(repo,tag)!=commit: raise ValueError("Publication failed verification")
 print(live["html_url"])
