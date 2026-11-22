@@ -1,0 +1,145 @@
+name: Stable release
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: '17 */6 * * *'
+permissions:
+  contents: read
+concurrency:
+  group: stable-release
+  cancel-in-progress: false
+jobs:
+  plan:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    outputs:
+      tag: ${{ steps.select.outputs.tag }}
+      source: ${{ steps.select.outputs.source }}
+      core: ${{ steps.select.outputs.core }}
+      waiting: ${{ steps.select.outputs.waiting }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: distribution
+          path: control
+      - id: select
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python3 control/release/sync.py
+  test:
+    needs: plan
+    if: needs.plan.outputs.tag != ''
+    runs-on: ubuntu-latest
+    env:
+      CGO_ENABLED: 0
+      GOTOOLCHAIN: local
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: distribution
+          path: control
+          persist-credentials: false
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ needs.plan.outputs.source }}
+          path: source
+          persist-credentials: false
+      - uses: actions/setup-go@4a3601121dd01d1626a1e23e37211e3254c1c06c
+        with:
+          go-download-base-url: https://github.com/MetaCubeX/go/releases/download/build
+          go-version: '1.26'
+          cache-dependency-path: source/go.sum
+      - name: Run upstream tests and downstream wire checks
+        working-directory: source
+        run: /usr/bin/python3 ../control/release/core_recipe.py test
+
+  build:
+    needs: plan
+    if: needs.plan.outputs.tag != ''
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        arch: [amd64-v2, arm64]
+    env:
+      CGO_ENABLED: 0
+      GOTOOLCHAIN: local
+      VERSION: ${{ needs.plan.outputs.tag }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: distribution
+          path: control
+          persist-credentials: false
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ needs.plan.outputs.source }}
+          path: source
+          persist-credentials: false
+      - uses: actions/setup-go@4a3601121dd01d1626a1e23e37211e3254c1c06c
+        with:
+          go-download-base-url: https://github.com/MetaCubeX/go/releases/download/build
+          go-version: '1.26'
+          cache-dependency-path: source/go.sum
+      - name: Use the official CA update and Windows packaging recipe
+        working-directory: source
+        env:
+          ARCH: ${{ matrix.arch }}
+        run: |
+          export BUILDTIME="$(git show -s --format=%cI HEAD)"
+          /usr/bin/python3 ../control/release/core_recipe.py "$ARCH"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: core-${{ matrix.arch }}
+          path: source/mihomo-windows-*-${{ env.VERSION }}.zip
+          if-no-files-found: error
+  publish:
+    needs: [plan, test, build]
+    if: needs.plan.outputs.tag != ''
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: distribution
+          path: control
+      - uses: actions/download-artifact@v4
+        with:
+          path: assets
+          merge-multiple: true
+      - name: Verify and publish the draft
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ needs.plan.outputs.tag }}
+          SOURCE_SHA: ${{ needs.plan.outputs.source }}
+        run: |
+          printf '%s\n' "$RELEASE_TAG" >assets/version.txt
+          python3 control/release/publish.py
+  wake:
+    needs: [plan, publish]
+    if: always() && needs.publish.result == 'success'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Report pending app installation
+        if: vars.WAKE_APP_CLIENT_ID == ''
+        run: echo '::warning::Cross-repository wake requires the release app. Scheduled reconciliation remains enabled.'
+      - uses: actions/create-github-app-token@v3
+        id: app
+        if: vars.WAKE_APP_CLIENT_ID != ''
+        with:
+          client-id: ${{ vars.WAKE_APP_CLIENT_ID }}
+          private-key: ${{ secrets.WAKE_APP_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+          repositories: clash-verge-rev,ClashMetaForAndroid
+          permission-actions: write
+      - name: Wake dependent release checks
+        if: steps.app.outputs.token != ''
+        env:
+          GH_TOKEN: ${{ steps.app.outputs.token }}
+        run: |
+          status=0
+          for repo in clash-verge-rev ClashMetaForAndroid; do
+            gh workflow run sync.yml -R "vertno/$repo" --ref distribution || status=1
+          done
+          exit "$status"
