@@ -184,7 +184,7 @@ index 0000000..3dfabf8
 +	}
 +}
 diff --git a/component/updater/update_core.go b/component/updater/update_core.go
-index 0afa94a..66de968 100644
+index 0afa94a..30f2d6b 100644
 --- a/component/updater/update_core.go
 +++ b/component/updater/update_core.go
 @@ -24,11 +24,11 @@ import (
@@ -198,8 +198,8 @@ index 0afa94a..66de968 100644
  
 -	baseAlphaURL    = "https://github.com/MetaCubeX/mihomo/releases/download/Prerelease-Alpha/"
 -	versionAlphaURL = "https://github.com/MetaCubeX/mihomo/releases/download/Prerelease-Alpha/version.txt"
-+	baseAlphaURL    = "https://github.com/vertno/mihomo/releases/download/Prerelease-Alpha/"
-+	versionAlphaURL = "https://github.com/vertno/mihomo/releases/download/Prerelease-Alpha/version.txt"
++	baseAlphaURL    = baseReleaseURL
++	versionAlphaURL = versionReleaseURL
  
  	// MaxPackageFileSize is a maximum package file length in bytes. The largest
  	// package whose size is limited by this constant currently has the size of
